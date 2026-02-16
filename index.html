@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#1b2a4a" />
+  <title>Conto Ore</title>
+
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="stylesheet" href="./style.css" />
+
+  <!-- XLSX (SheetJS) per export .xlsx -->
+  <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <div class="title">Conto Ore <span class="ver">v1.0</span></div>
+        <div class="sub">Turni, pause, ore e guadagni. Export Excel.</div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="card">
+        <div class="row">
+          <button class="iconbtn" id="prevDay" aria-label="Giorno precedente">‹</button>
+
+          <div class="grow">
+            <label class="lbl">Data</label>
+            <input id="datePicker" type="date" />
+          </div>
+
+          <button class="iconbtn" id="nextDay" aria-label="Giorno successivo">›</button>
+        </div>
+
+        <div class="row" style="margin-top:12px; gap:12px; flex-wrap:wrap">
+          <div class="grow">
+            <label class="lbl">Paga oraria (€)</label>
+            <input id="hourlyRate" type="number" step="0.01" inputmode="decimal" placeholder="Es. 10,00" />
+            <div class="hint">Valore globale. Puoi sovrascriverlo nel singolo turno.</div>
+          </div>
+
+          <div class="row" style="gap:10px; align-items:flex-end">
+            <button class="btn" id="addShiftBtn" type="button">Aggiungi turno</button>
+            <button class="btn secondary" id="exportBtn" type="button">Esporta Excel (.xlsx)</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="h2">Turni del giorno</div>
+        <div id="shiftList" class="list"></div>
+      </section>
+
+      <section class="grid4">
+        <div class="card stat">
+          <div class="k">Oggi</div>
+          <div class="v" id="dayHours">0:00</div>
+          <div class="s" id="dayMoney">€ 0,00</div>
+        </div>
+
+        <div class="card stat">
+          <div class="k">Settimana</div>
+          <div class="v" id="weekHours">0:00</div>
+          <div class="s" id="weekMoney">€ 0,00</div>
+        </div>
+
+        <div class="card stat">
+          <div class="k">Mese</div>
+          <div class="v" id="monthHours">0:00</div>
+          <div class="s" id="monthMoney">€ 0,00</div>
+        </div>
+
+        <div class="card stat">
+          <div class="k">Anno</div>
+          <div class="v" id="yearHours">0:00</div>
+          <div class="s" id="yearMoney">€ 0,00</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Shift Modal -->
+  <div class="modal" id="shiftModal" aria-hidden="true">
+    <div class="panel" role="dialog" aria-modal="true" aria-labelledby="shiftTitle">
+      <header>
+        <div class="t" id="shiftTitle">Nuovo turno</div>
+        <button class="iconbtn" id="closeShift" aria-label="Chiudi">✕</button>
+      </header>
+
+      <div class="body">
+        <div class="row2">
+          <div>
+            <div class="field">
+              <label>Ora inizio</label>
+              <select id="startTime"></select>
+            </div>
+
+            <div class="field" style="margin-top:10px">
+              <label>Ora fine</label>
+              <select id="endTime"></select>
+              <div class="hint">Step 15 minuti.</div>
+            </div>
+
+            <div class="field" style="margin-top:14px">
+              <label>Tempo buco (pause / non lavoro)</label>
+              <div id="breakList" class="breakList"></div>
+              <button class="btn secondary" id="addBreakBtn" type="button" style="margin-top:10px">Aggiungi pausa</button>
+              <div class="hint">Più pause possibili (es. 12:30–13:15).</div>
+            </div>
+          </div>
+
+          <div>
+            <div class="field">
+              <label>Paga oraria per questo turno (opzionale)</label>
+              <input id="shiftRate" type="number" step="0.01" inputmode="decimal" placeholder="Lascia vuoto = globale" />
+            </div>
+
+            <div class="field" style="margin-top:10px">
+              <label>Note (opzionale)</label>
+              <input id="shiftNote" type="text" placeholder="Es. extra, sostituzione…" />
+            </div>
+
+            <div class="card mini" style="margin-top:14px">
+              <div class="row" style="justify-content:space-between">
+                <div class="k">Ore lavorate</div>
+                <div class="v" id="previewHours">0:00</div>
+              </div>
+              <div class="row" style="justify-content:space-between; margin-top:6px">
+                <div class="k">Guadagno</div>
+                <div class="v" id="previewMoney">€ 0,00</div>
+              </div>
+              <div class="hint" style="margin-top:8px">Calcolo = (fine − inizio − pause) × paga.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions stickyActions">
+          <button class="btn secondary" id="cancelShift" type="button">Annulla</button>
+          <button class="btn" id="saveShift" type="button">Salva</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
