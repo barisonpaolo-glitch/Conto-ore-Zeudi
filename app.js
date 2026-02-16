@@ -383,21 +383,29 @@ function exportExcel(){
 
   XLSX.writeFile(wb, `ContoOre_${year}.xlsx`);
 }
+function dateToYMDLocal(d){
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const dd = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${dd}`;
+}
 
 /* ---------- Wire ---------- */
 function wire(){
   $("#datePicker").addEventListener("change", (e)=>setDate(e.target.value));
 
   $("#prevDay").addEventListener("click", ()=>{
-    const d = new Date(currentDate+"T00:00:00");
-    d.setDate(d.getDate()-1);
-    setDate(d.toISOString().slice(0,10));
-  });
-  $("#nextDay").addEventListener("click", ()=>{
-    const d = new Date(currentDate+"T00:00:00");
-    d.setDate(d.getDate()+1);
-    setDate(d.toISOString().slice(0,10));
-  });
+  const d = new Date(currentDate+"T12:00:00"); // mezzogiorno = niente problemi UTC/DST
+  d.setDate(d.getDate()-1);
+  setDate(dateToYMDLocal(d));
+});
+
+$("#nextDay").addEventListener("click", ()=>{
+  const d = new Date(currentDate+"T12:00:00");
+  d.setDate(d.getDate()+1);
+  setDate(dateToYMDLocal(d));
+});
+
 
   $("#hourlyRate").addEventListener("input", (e)=>{
     state.settings.hourlyRate = parseNum(e.target.value);
