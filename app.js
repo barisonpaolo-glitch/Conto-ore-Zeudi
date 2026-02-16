@@ -1,9 +1,17 @@
 const $ = (sel) => document.querySelector(sel);
 
-const STORAGE_KEY = "conto-ore.v1";
+const STORAGE_KEY = "conto-ore.v2";
 
 const state = loadState();
 let currentDate = state.currentDate || todayYMD();
+
+function defaultState(){
+  return {
+    currentDate: null,
+    settings: { hourlyRate: 0 },
+    days: {} // { "YYYY-MM-DD": { morning:{start,end,gapMin} | null, afternoon:{...}|null } }
+  };
+}
 
 function loadState(){
   try{
@@ -15,24 +23,9 @@ function loadState(){
     return defaultState();
   }
 }
-
-function defaultState(){
-  return {
-    currentDate: null,
-    settings: { hourlyRate: 0 },
-    years: {} // { "2026": { days: { "2026-02-16": [shift,...] } } }
-  };
-}
-
 function saveState(){
   state.currentDate = currentDate;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function yearKeyFromDate(d){ return d.slice(0,4); }
-function yearData(y){
-  if(!state.years[y]) state.years[y] = { days: {} };
-  return state.years[y];
 }
 
 function todayYMD(){
@@ -43,13 +36,10 @@ function todayYMD(){
   return `${y}-${m}-${dd}`;
 }
 
-function clamp(n,min,max){ return Math.max(min, Math.min(max,n)); }
-
 function euro(n){
   const v = (Number.isFinite(n) ? n : 0);
   return new Intl.NumberFormat("it-IT",{style:"currency", currency:"EUR"}).format(v);
 }
-
 function parseNum(x){
   if(x===null || x===undefined || x==="") return 0;
   const s = String(x).replace(",",".");
@@ -57,28 +47,11 @@ function parseNum(x){
   return Number.isFinite(n) ? n : 0;
 }
 
-function timeOptions(){
-  const out = [];
-  for(let m=0; m<=1440; m+=15){
-    out.push(minToHHMM(m));
-  }
-  return out;
-}
-
 function hhmmToMin(hhmm){
   if(!hhmm) return 0;
   const [h,m] = hhmm.split(":").map(Number);
   return (h*60 + m);
 }
-
-function minToHHMM(min){
-  min = clamp(min,0,1440);
-  const h = Math.floor(min/60);
-  const m = min%60;
-  if(h===24 && m===0) return "24:00";
-  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
-}
-
 function formatHM(minutes){
   minutes = Math.max(0, Math.round(minutes));
   const h = Math.floor(minutes/60);
@@ -86,27 +59,53 @@ function formatHM(minutes){
   return `${h}:${String(m).padStart(2,"0")}`;
 }
 
-function computeShift(shift){
-  const start = hhmmToMin(shift.start);
-  const end = hhmmToMin(shift.end);
-  if(end <= start) return { ok:false, workMin:0, money:0, breaksMin:0, rate:0 };
+function timeOptions(){
+  const out = [];
+  for(let m=0; m<=1440; m+=15){
+    const hh = String(Math.floor(m/60)).padStart(2,"0");
+    const mm = String(m%60).padStart(2,"0");
+    out.push(`${hh}:${mm}`);
+  }
+  return out;
+}
 
-  const breaks = (shift.breaks || []).map(b=>{
-    const bs = hhmmToMin(b.start);
-    const be = hhmmToMin(b.end);
-    if(be <= bs) return 0;
-    const s = clamp(bs, start, end);
-    const e = clamp(be, start, end);
-    return Math.max(0, e - s);
-  });
+function fillSelect(sel, opts, value){
+  sel.innerHTML = "";
+  for(const o of opts){
+    const opt = document.createElement("option");
+    opt.value = o;
+    opt.textContent = o;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+}
 
-  const breaksMin = breaks.reduce((a,b)=>a+b,0);
-  const workMin = Math.max(0, (end - start) - breaksMin);
+function getDay(date){
+  if(!state.days[date]) state.days[date] = { morning:null, afternoon:null };
+  return state.days[date];
+}
 
-  const rate = (shift.rate===null || shift.rate===undefined || shift.rate==="") ? parseNum(state.settings.hourlyRate) : parseNum(shift.rate);
+function computePart(part){
+  if(!part) return { ok:true, workMin:0 };
+  const s = hhmmToMin(part.start);
+  const e = hhmmToMin(part.end);
+  if(e <= s) return { ok:false, workMin:0 };
+  const gap = Math.max(0, parseNum(part.gapMin));
+  const work = Math.max(0, (e - s) - gap);
+  return { ok:true, workMin:work };
+}
+
+function computeDay(date){
+  const d = getDay(date);
+  const m = computePart(d.morning);
+  const a = computePart(d.afternoon);
+  const ok = m.ok && a.ok;
+
+  const workMin = (m.workMin + a.workMin);
+  const rate = parseNum(state.settings.hourlyRate);
   const money = (workMin/60) * rate;
 
-  return { ok:true, workMin, breaksMin, rate, money };
+  return { ok, workMin, money };
 }
 
 /* ISO week key: YYYY-Www */
@@ -122,22 +121,17 @@ function isoWeekKey(dateStr){
   return `${weekYear}-W${String(weekNo).padStart(2,"0")}`;
 }
 
-function allShiftsForYear(year){
-  const yd = yearData(year);
-  const out = [];
-  for(const date of Object.keys(yd.days).sort()){
-    for(const sh of (yd.days[date] || [])){
-      out.push({ date, ...sh });
-    }
+function totalsForFilter(fn){
+  let workMin = 0;
+  let money = 0;
+  for(const date of Object.keys(state.days)){
+    if(!fn(date)) continue;
+    const c = computeDay(date);
+    // se una parte ha orari invalidi, non la conteggio (ma segnaleremo in anteprima)
+    workMin += c.workMin;
+    money += c.money;
   }
-  return out;
-}
-
-function dayShifts(date){
-  const y = yearKeyFromDate(date);
-  const yd = yearData(y);
-  if(!yd.days[date]) yd.days[date] = [];
-  return yd.days[date];
+  return { workMin, money };
 }
 
 function setDate(d){
@@ -147,230 +141,136 @@ function setDate(d){
   render();
 }
 
-/* ---------- UI ---------- */
+/* ---------- Modal ---------- */
+function openModal(){
+  const day = getDay(currentDate);
 
-let editingIndex = null;
+  const opts = timeOptions();
+  fillSelect($("#mStart"), opts, day.morning?.start || "08:00");
+  fillSelect($("#mEnd"),   opts, day.morning?.end   || "12:00");
+  fillSelect($("#aStart"), opts, day.afternoon?.start || "14:00");
+  fillSelect($("#aEnd"),   opts, day.afternoon?.end   || "18:00");
 
-function openShiftModal(index=null){
-  editingIndex = index;
-  const shifts = dayShifts(currentDate);
-  const shift = (index===null) ? newEmptyShift() : JSON.parse(JSON.stringify(shifts[index]));
+  $("#mGap").value = day.morning?.gapMin ?? "";
+  $("#aGap").value = day.afternoon?.gapMin ?? "";
 
-  $("#shiftTitle").textContent = (index===null) ? "Nuovo turno" : "Modifica turno";
+  $("#mEnabled").checked = !!day.morning;
+  $("#aEnabled").checked = !!day.afternoon;
 
-  fillSelect($("#startTime"), timeOptions(), shift.start || "08:00");
-  fillSelect($("#endTime"), timeOptions(), shift.end || "17:00");
-
-  $("#shiftRate").value = (shift.rate===null || shift.rate===undefined) ? "" : String(shift.rate);
-  $("#shiftNote").value = shift.note || "";
-
-  $("#breakList").innerHTML = "";
-  (shift.breaks || []).forEach(b => addBreakRow(b.start, b.end));
-  // Se non ci sono pause, non ne aggiungo una “finta”: meno confusione.
+  syncEnabledUI();
   updatePreview();
 
-  $("#shiftModal").classList.add("show");
+  $("#dayModal").classList.add("show");
 }
 
-function closeShiftModal(){
-  $("#shiftModal").classList.remove("show");
-  editingIndex = null;
+function closeModal(){
+  $("#dayModal").classList.remove("show");
 }
 
-function newEmptyShift(){
-  return {
-    start:"08:00",
-    end:"17:00",
-    breaks: [],
-    rate: null,
-    note:""
-  };
-}
+function syncEnabledUI(){
+  $("#mFields").style.opacity = $("#mEnabled").checked ? "1" : ".45";
+  $("#aFields").style.opacity = $("#aEnabled").checked ? "1" : ".45";
 
-function fillSelect(sel, opts, value){
-  sel.innerHTML = "";
-  for(const o of opts){
-    const opt = document.createElement("option");
-    opt.value = o;
-    opt.textContent = o;
-    sel.appendChild(opt);
-  }
-  sel.value = value;
-}
+  $("#mStart").disabled = !$("#mEnabled").checked;
+  $("#mEnd").disabled   = !$("#mEnabled").checked;
+  $("#mGap").disabled   = !$("#mEnabled").checked;
 
-function addBreakRow(start="12:00", end="12:30"){
-  const row = document.createElement("div");
-  row.className = "breakRow";
-
-  const sWrap = document.createElement("div");
-  const eWrap = document.createElement("div");
-
-  const sLbl = document.createElement("label");
-  sLbl.textContent = "Inizio";
-  sLbl.className = "lbl";
-  const eLbl = document.createElement("label");
-  eLbl.textContent = "Fine";
-  eLbl.className = "lbl";
-
-  const sSel = document.createElement("select");
-  const eSel = document.createElement("select");
-  fillSelect(sSel, timeOptions(), start);
-  fillSelect(eSel, timeOptions(), end);
-
-  sSel.addEventListener("change", updatePreview);
-  eSel.addEventListener("change", updatePreview);
-
-  sWrap.appendChild(sLbl); sWrap.appendChild(sSel);
-  eWrap.appendChild(eLbl); eWrap.appendChild(eSel);
-
-  const del = document.createElement("button");
-  del.type = "button";
-  del.className = "del";
-  del.textContent = "🗑";
-  del.addEventListener("click", ()=>{
-    row.remove();
-    updatePreview();
-  });
-
-  row.appendChild(sWrap);
-  row.appendChild(eWrap);
-  row.appendChild(del);
-
-  $("#breakList").appendChild(row);
-  updatePreview();
-}
-
-function collectBreaks(){
-  const rows = Array.from($("#breakList").querySelectorAll(".breakRow"));
-  return rows.map(r=>{
-    const sels = r.querySelectorAll("select");
-    return { start: sels[0].value, end: sels[1].value };
-  }).filter(b=>b.start && b.end);
+  $("#aStart").disabled = !$("#aEnabled").checked;
+  $("#aEnd").disabled   = !$("#aEnabled").checked;
+  $("#aGap").disabled   = !$("#aEnabled").checked;
 }
 
 function updatePreview(){
   const tmp = {
-    start: $("#startTime").value,
-    end: $("#endTime").value,
-    breaks: collectBreaks(),
-    rate: ($("#shiftRate").value.trim()==="") ? null : parseNum($("#shiftRate").value),
-    note: $("#shiftNote").value || ""
+    morning: $("#mEnabled").checked ? {
+      start: $("#mStart").value, end: $("#mEnd").value, gapMin: parseNum($("#mGap").value)
+    } : null,
+    afternoon: $("#aEnabled").checked ? {
+      start: $("#aStart").value, end: $("#aEnd").value, gapMin: parseNum($("#aGap").value)
+    } : null
   };
-  const c = computeShift(tmp);
-  $("#previewHours").textContent = formatHM(c.workMin);
-  $("#previewMoney").textContent = euro(c.money);
+
+  const m = computePart(tmp.morning);
+  const a = computePart(tmp.afternoon);
+
+  if(!m.ok || !a.ok){
+    $("#previewHours").textContent = "—";
+    $("#previewMoney").textContent = "Orari non validi";
+    return;
+  }
+  const workMin = m.workMin + a.workMin;
+  const money = (workMin/60) * parseNum(state.settings.hourlyRate);
+
+  $("#previewHours").textContent = formatHM(workMin);
+  $("#previewMoney").textContent = euro(money);
 }
 
-function saveShift(){
-  const shift = {
-    start: $("#startTime").value,
-    end: $("#endTime").value,
-    breaks: collectBreaks(),
-    rate: ($("#shiftRate").value.trim()==="") ? null : parseNum($("#shiftRate").value),
-    note: $("#shiftNote").value || ""
-  };
+function saveDay(){
+  const day = getDay(currentDate);
 
-  const c = computeShift(shift);
-  if(!c.ok){
-    alert("Controlla orari: l'ora fine deve essere dopo l'ora inizio.");
+  const morning = $("#mEnabled").checked ? {
+    start: $("#mStart").value,
+    end: $("#mEnd").value,
+    gapMin: parseNum($("#mGap").value)
+  } : null;
+
+  const afternoon = $("#aEnabled").checked ? {
+    start: $("#aStart").value,
+    end: $("#aEnd").value,
+    gapMin: parseNum($("#aGap").value)
+  } : null;
+
+  const cm = computePart(morning);
+  const ca = computePart(afternoon);
+  if(!cm.ok || !ca.ok){
+    alert("Controlla gli orari: la fine deve essere dopo l'inizio (mattina/pomeriggio).");
     return;
   }
 
-  const shifts = dayShifts(currentDate);
-  if(editingIndex===null){
-    shifts.push(shift);
+  day.morning = morning;
+  day.afternoon = afternoon;
+
+  // se entrambe vuote, tolgo proprio la giornata
+  if(!day.morning && !day.afternoon){
+    delete state.days[currentDate];
+  }
+
+  saveState();
+  closeModal();
+  render();
+}
+
+function deleteDay(){
+  if(!state.days[currentDate]) return;
+  if(!confirm("Cancellare i dati di questa giornata?")) return;
+  delete state.days[currentDate];
+  saveState();
+  render();
+}
+
+/* ---------- Render ---------- */
+function renderDaySummary(){
+  const d = state.days[currentDate];
+  if(!d || (!d.morning && !d.afternoon)){
+    $("#daySummary").textContent = "Nessun inserimento per questa data.";
+    return;
+  }
+  const parts = [];
+  if(d.morning){
+    parts.push(`Mattina: ${d.morning.start}–${d.morning.end} (buco ${d.morning.gapMin||0} min)`);
   }else{
-    shifts[editingIndex] = shift;
+    parts.push("Mattina: —");
   }
-  saveState();
-  closeShiftModal();
-  render();
-}
-
-function deleteShift(index){
-  const shifts = dayShifts(currentDate);
-  if(!confirm("Eliminare questo turno?")) return;
-  shifts.splice(index,1);
-  saveState();
-  render();
-}
-
-function renderShiftList(){
-  const el = $("#shiftList");
-  el.innerHTML = "";
-
-  const shifts = dayShifts(currentDate);
-  if(shifts.length===0){
-    const empty = document.createElement("div");
-    empty.className = "hint";
-    empty.textContent = "Nessun turno per questa data.";
-    el.appendChild(empty);
-    return;
+  if(d.afternoon){
+    parts.push(`Pomeriggio: ${d.afternoon.start}–${d.afternoon.end} (buco ${d.afternoon.gapMin||0} min)`);
+  }else{
+    parts.push("Pomeriggio: —");
   }
-
-  shifts.forEach((sh, i)=>{
-    const c = computeShift(sh);
-
-    const item = document.createElement("div");
-    item.className = "item";
-
-    const left = document.createElement("div");
-    const main = document.createElement("div");
-    main.className = "mainline";
-    main.textContent = `${sh.start} → ${sh.end}`;
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const breaksTxt = c.breaksMin>0 ? `Pause: ${formatHM(c.breaksMin)}` : "Pause: 0:00";
-    const noteTxt = sh.note ? ` · ${sh.note}` : "";
-    meta.textContent = `${breaksTxt} · Lavoro: ${formatHM(c.workMin)} · ${euro(c.money)}${noteTxt}`;
-
-    left.appendChild(main);
-    left.appendChild(meta);
-
-    const right = document.createElement("div");
-    right.className = "right";
-
-    const btns = document.createElement("div");
-    btns.className = "pills";
-    const edit = document.createElement("button");
-    edit.className = "btn secondary";
-    edit.textContent = "Modifica";
-    edit.addEventListener("click", ()=>openShiftModal(i));
-    const del = document.createElement("button");
-    del.className = "btn secondary";
-    del.textContent = "Elimina";
-    del.addEventListener("click", ()=>deleteShift(i));
-    btns.appendChild(edit);
-    btns.appendChild(del);
-
-    right.appendChild(btns);
-
-    item.appendChild(left);
-    item.appendChild(right);
-    el.appendChild(item);
-  });
-}
-
-function totalsForFilter(fn){
-  let workMin = 0;
-  let money = 0;
-  for(const y of Object.keys(state.years)){
-    const yd = state.years[y];
-    for(const date of Object.keys(yd.days || {})){
-      if(!fn(date)) continue;
-      for(const sh of (yd.days[date]||[])){
-        const c = computeShift(sh);
-        workMin += c.workMin;
-        money += c.money;
-      }
-    }
-  }
-  return { workMin, money };
+  $("#daySummary").textContent = parts.join(" · ");
 }
 
 function renderStats(){
-  const y = yearKeyFromDate(currentDate);
+  const y = currentDate.slice(0,4);
   const wk = isoWeekKey(currentDate);
   const mk = currentDate.slice(0,7);
 
@@ -395,95 +295,96 @@ function renderStats(){
 function render(){
   $("#datePicker").value = currentDate;
   $("#hourlyRate").value = String(parseNum(state.settings.hourlyRate) || "");
-  renderShiftList();
+  renderDaySummary();
   renderStats();
 }
 
-/* ---------- Export XLSX ---------- */
-
+/* ---------- Export XLSX (solo dati) ---------- */
 function exportExcel(){
-  const year = yearKeyFromDate(currentDate);
-  const shifts = allShiftsForYear(year);
-
   if(!window.XLSX){
-    alert("Libreria XLSX non caricata. Serve connessione attiva per creare il file .xlsx (solo al momento dell’export).");
+    alert("Libreria XLSX non caricata. Riprova con connessione attiva (serve per creare il file .xlsx).");
     return;
   }
 
-  const detailRows = [
-    ["Data","Inizio","Fine","Pause (min)","Ore lavorate","Paga oraria (€)","Guadagno (€)","Note"]
+  const year = currentDate.slice(0,4);
+  const rate = parseNum(state.settings.hourlyRate);
+
+  const dates = Object.keys(state.days)
+    .filter(d=>d.startsWith(year+"-"))
+    .sort();
+
+  const dettaglio = [
+    ["Data","M_inizio","M_fine","M_buco_min","P_inizio","P_fine","P_buco_min","Ore_lavorate","Guadagno_EUR"]
   ];
 
-  const dailyMap = new Map();
+  const daily = new Map();
   const weekMap = new Map();
   const monthMap = new Map();
 
-  for(const sh of shifts){
-    const c = computeShift(sh);
-    const rate = (sh.rate===null || sh.rate===undefined || sh.rate==="") ? parseNum(state.settings.hourlyRate) : parseNum(sh.rate);
-    detailRows.push([
-      sh.date,
-      sh.start,
-      sh.end,
-      c.breaksMin,
-      (c.workMin/60),
-      rate,
-      c.money,
-      sh.note || ""
-    ]);
+  for(const date of dates){
+    const d = state.days[date];
+    const c = computeDay(date);
 
-    if(!dailyMap.has(sh.date)) dailyMap.set(sh.date,{workMin:0,money:0});
-    dailyMap.get(sh.date).workMin += c.workMin;
-    dailyMap.get(sh.date).money += c.money;
+    const mS = d.morning?.start || "";
+    const mE = d.morning?.end || "";
+    const mG = d.morning ? (d.morning.gapMin||0) : "";
+    const aS = d.afternoon?.start || "";
+    const aE = d.afternoon?.end || "";
+    const aG = d.afternoon ? (d.afternoon.gapMin||0) : "";
 
-    const wKey = isoWeekKey(sh.date);
-    if(!weekMap.has(wKey)) weekMap.set(wKey,{workMin:0,money:0});
-    weekMap.get(wKey).workMin += c.workMin;
-    weekMap.get(wKey).money += c.money;
+    dettaglio.push([date, mS, mE, mG, aS, aE, aG, c.workMin/60, c.money]);
 
-    const mKey = sh.date.slice(0,7);
-    if(!monthMap.has(mKey)) monthMap.set(mKey,{workMin:0,money:0});
-    monthMap.get(mKey).workMin += c.workMin;
-    monthMap.get(mKey).money += c.money;
+    if(!daily.has(date)) daily.set(date,{workMin:0,money:0});
+    daily.get(date).workMin += c.workMin;
+    daily.get(date).money += c.money;
+
+    const wk = isoWeekKey(date);
+    if(!weekMap.has(wk)) weekMap.set(wk,{workMin:0,money:0});
+    weekMap.get(wk).workMin += c.workMin;
+    weekMap.get(wk).money += c.money;
+
+    const mk = date.slice(0,7);
+    if(!monthMap.has(mk)) monthMap.set(mk,{workMin:0,money:0});
+    monthMap.get(mk).workMin += c.workMin;
+    monthMap.get(mk).money += c.money;
   }
 
-  const dailyRows = [["Data","Ore lavorate","Guadagno (€)"]];
-  Array.from(dailyMap.entries()).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([d,v])=>{
-    dailyRows.push([d, v.workMin/60, v.money]);
+  const giornaliero = [["Data","Ore_lavorate","Guadagno_EUR"]];
+  Array.from(daily.entries()).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{
+    giornaliero.push([k, v.workMin/60, v.money]);
   });
 
-  const weeklyRows = [["Settimana (ISO)","Ore lavorate","Guadagno (€)"]];
+  const settimanale = [["Settimana_ISO","Ore_lavorate","Guadagno_EUR"]];
   Array.from(weekMap.entries()).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{
-    weeklyRows.push([k, v.workMin/60, v.money]);
+    settimanale.push([k, v.workMin/60, v.money]);
   });
 
-  const monthlyRows = [["Mese","Ore lavorate","Guadagno (€)"]];
+  const mensile = [["Mese","Ore_lavorate","Guadagno_EUR"]];
   Array.from(monthMap.entries()).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{
-    monthlyRows.push([k, v.workMin/60, v.money]);
+    mensile.push([k, v.workMin/60, v.money]);
   });
 
-  const yearTotals = monthlyRows.slice(1).reduce((acc,r)=>acc + (Number(r[1])||0), 0);
-  const yearMoney = monthlyRows.slice(1).reduce((acc,r)=>acc + (Number(r[2])||0), 0);
+  const totOreAnno = mensile.slice(1).reduce((a,r)=>a + (Number(r[1])||0), 0);
+  const totMoneyAnno = mensile.slice(1).reduce((a,r)=>a + (Number(r[2])||0), 0);
 
-  const summaryRows = [
+  const riepilogo = [
     ["Anno", year],
-    ["Paga oraria globale (€)", parseNum(state.settings.hourlyRate)],
-    ["Ore totali anno", yearTotals],
-    ["Guadagno totale anno (€)", yearMoney]
+    ["Paga_oraria_EUR", rate],
+    ["Ore_totali_anno", totOreAnno],
+    ["Guadagno_totale_anno_EUR", totMoneyAnno]
   ];
 
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), "Riepilogo");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(monthlyRows), "Mensile");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(weeklyRows), "Settimanale");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dailyRows), "Giornaliero");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "Dettaglio");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(riepilogo), "Riepilogo");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(mensile), "Mensile");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(settimanale), "Settimanale");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(giornaliero), "Giornaliero");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dettaglio), "Dettaglio");
 
   XLSX.writeFile(wb, `ContoOre_${year}.xlsx`);
 }
 
 /* ---------- Wire ---------- */
-
 function wire(){
   $("#datePicker").addEventListener("change", (e)=>setDate(e.target.value));
 
@@ -504,27 +405,33 @@ function wire(){
     render();
   });
 
-  $("#addShiftBtn").addEventListener("click", ()=>openShiftModal(null));
+  $("#editDayBtn").addEventListener("click", openModal);
+  $("#deleteDayBtn").addEventListener("click", deleteDay);
+
+  $("#closeModal").addEventListener("click", closeModal);
+  $("#cancelModal").addEventListener("click", closeModal);
+  $("#dayModal").addEventListener("click", (e)=>{
+    if(e.target === $("#dayModal")) closeModal();
+  });
+
+  $("#mEnabled").addEventListener("change", ()=>{ syncEnabledUI(); updatePreview(); });
+  $("#aEnabled").addEventListener("change", ()=>{ syncEnabledUI(); updatePreview(); });
+
+  ["mStart","mEnd","aStart","aEnd"].forEach(id=>{
+    $("#"+id).addEventListener("change", updatePreview);
+  });
+  ["mGap","aGap"].forEach(id=>{
+    $("#"+id).addEventListener("input", updatePreview);
+  });
+
+  $("#saveDay").addEventListener("click", saveDay);
+
   $("#exportBtn").addEventListener("click", exportExcel);
 
-  $("#closeShift").addEventListener("click", closeShiftModal);
-  $("#cancelShift").addEventListener("click", closeShiftModal);
-  $("#shiftModal").addEventListener("click", (e)=>{
-    if(e.target === $("#shiftModal")) closeShiftModal();
-  });
-
-  $("#startTime").addEventListener("change", updatePreview);
-  $("#endTime").addEventListener("change", updatePreview);
-  $("#shiftRate").addEventListener("input", updatePreview);
-  $("#shiftNote").addEventListener("input", updatePreview);
-  $("#addBreakBtn").addEventListener("click", ()=>addBreakRow("12:00","12:30"));
-  $("#saveShift").addEventListener("click", saveShift);
-
   document.addEventListener("keydown", (e)=>{
-    if(e.key==="Escape") closeShiftModal();
+    if(e.key==="Escape") closeModal();
   });
 
-  // PWA Service Worker
   if("serviceWorker" in navigator){
     navigator.serviceWorker.register("./sw.js").catch(()=>{});
   }
