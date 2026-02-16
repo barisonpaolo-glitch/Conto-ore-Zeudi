@@ -9,7 +9,7 @@ function defaultState(){
   return {
     currentDate: null,
     settings: { hourlyRate: 0 },
-    days: {} // { "YYYY-MM-DD": { morning:{start,end,gapMin} | null, afternoon:{...}|null } }
+    days: {} // { "YYYY-MM-DD": { morning:{start,end,gapMin} | null, afternoon:{start,end,gapMin} | null } }
   };
 }
 
@@ -30,6 +30,14 @@ function saveState(){
 
 function todayYMD(){
   const d = new Date();
+  return dateToYMDLocal(d);
+}
+
+/**
+ * IMPORTANTISSIMO: usa sempre data in ORA LOCALE (non UTC),
+ * per evitare che i tasti avanti/indietro saltino giorni.
+ */
+function dateToYMDLocal(d){
   const y = d.getFullYear();
   const m = String(d.getMonth()+1).padStart(2,"0");
   const dd = String(d.getDate()).padStart(2,"0");
@@ -110,7 +118,7 @@ function computeDay(date){
 
 /* ISO week key: YYYY-Www */
 function isoWeekKey(dateStr){
-  const d = new Date(dateStr + "T00:00:00");
+  const d = new Date(dateStr + "T12:00:00"); // mezzogiorno = safe contro DST
   const day = (d.getDay()+6)%7; // Mon=0..Sun=6
   d.setDate(d.getDate() - day + 3); // Thu
   const weekYear = d.getFullYear();
@@ -127,7 +135,6 @@ function totalsForFilter(fn){
   for(const date of Object.keys(state.days)){
     if(!fn(date)) continue;
     const c = computeDay(date);
-    // se una parte ha orari invalidi, non la conteggio (ma segnaleremo in anteprima)
     workMin += c.workMin;
     money += c.money;
   }
@@ -151,8 +158,8 @@ function openModal(){
   fillSelect($("#aStart"), opts, day.afternoon?.start || "14:00");
   fillSelect($("#aEnd"),   opts, day.afternoon?.end   || "18:00");
 
-  $("#mGap").value = day.morning?.gapMin ?? "";
-  $("#aGap").value = day.afternoon?.gapMin ?? "";
+  $("#mGap").value = (day.morning?.gapMin ?? "");
+  $("#aGap").value = (day.afternoon?.gapMin ?? "");
 
   $("#mEnabled").checked = !!day.morning;
   $("#aEnabled").checked = !!day.afternoon;
@@ -168,16 +175,19 @@ function closeModal(){
 }
 
 function syncEnabledUI(){
-  $("#mFields").style.opacity = $("#mEnabled").checked ? "1" : ".45";
-  $("#aFields").style.opacity = $("#aEnabled").checked ? "1" : ".45";
+  const mOn = $("#mEnabled").checked;
+  const aOn = $("#aEnabled").checked;
 
-  $("#mStart").disabled = !$("#mEnabled").checked;
-  $("#mEnd").disabled   = !$("#mEnabled").checked;
-  $("#mGap").disabled   = !$("#mEnabled").checked;
+  $("#mFields").style.opacity = mOn ? "1" : ".45";
+  $("#aFields").style.opacity = aOn ? "1" : ".45";
 
-  $("#aStart").disabled = !$("#aEnabled").checked;
-  $("#aEnd").disabled   = !$("#aEnabled").checked;
-  $("#aGap").disabled   = !$("#aEnabled").checked;
+  $("#mStart").disabled = !mOn;
+  $("#mEnd").disabled   = !mOn;
+  $("#mGap").disabled   = !mOn;
+
+  $("#aStart").disabled = !aOn;
+  $("#aEnd").disabled   = !aOn;
+  $("#aGap").disabled   = !aOn;
 }
 
 function updatePreview(){
@@ -230,7 +240,7 @@ function saveDay(){
   day.morning = morning;
   day.afternoon = afternoon;
 
-  // se entrambe vuote, tolgo proprio la giornata
+  // se entrambe vuote, tolgo la giornata dal DB
   if(!day.morning && !day.afternoon){
     delete state.days[currentDate];
   }
@@ -383,29 +393,23 @@ function exportExcel(){
 
   XLSX.writeFile(wb, `ContoOre_${year}.xlsx`);
 }
-function dateToYMDLocal(d){
-  const y = d.getFullYear();
-  const m = String(d.getMonth()+1).padStart(2,"0");
-  const dd = String(d.getDate()).padStart(2,"0");
-  return `${y}-${m}-${dd}`;
-}
 
 /* ---------- Wire ---------- */
 function wire(){
   $("#datePicker").addEventListener("change", (e)=>setDate(e.target.value));
 
+  // FIX: avanti/indietro usando ORA LOCALE (no UTC)
   $("#prevDay").addEventListener("click", ()=>{
-  const d = new Date(currentDate+"T12:00:00"); // mezzogiorno = niente problemi UTC/DST
-  d.setDate(d.getDate()-1);
-  setDate(dateToYMDLocal(d));
-});
+    const d = new Date(currentDate + "T12:00:00"); // mezzogiorno = safe
+    d.setDate(d.getDate() - 1);
+    setDate(dateToYMDLocal(d));
+  });
 
-$("#nextDay").addEventListener("click", ()=>{
-  const d = new Date(currentDate+"T12:00:00");
-  d.setDate(d.getDate()+1);
-  setDate(dateToYMDLocal(d));
-});
-
+  $("#nextDay").addEventListener("click", ()=>{
+    const d = new Date(currentDate + "T12:00:00");
+    d.setDate(d.getDate() + 1);
+    setDate(dateToYMDLocal(d));
+  });
 
   $("#hourlyRate").addEventListener("input", (e)=>{
     state.settings.hourlyRate = parseNum(e.target.value);
@@ -433,7 +437,6 @@ $("#nextDay").addEventListener("click", ()=>{
   });
 
   $("#saveDay").addEventListener("click", saveDay);
-
   $("#exportBtn").addEventListener("click", exportExcel);
 
   document.addEventListener("keydown", (e)=>{
